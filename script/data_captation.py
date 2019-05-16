@@ -6,7 +6,7 @@ import time
 
 def save_data(req):
     time.sleep(5)
-    return RequestSaveDataResponse("succeeded")
+    return RequestSaveDataResponse(['succeeded'])
 
 def save_data_server():
     rospy.init_node('save_data_server')

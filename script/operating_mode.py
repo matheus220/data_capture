@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 
+import datetime
 import json
-import time
 import threading
+import time
 
 import rospy
 from data_capture.srv import RequestSaveData, SetBatteryLevel
 from geometry_msgs.msg import Point, Quaternion, Pose, Twist
+from mongo_bridge.msg import Data, DataArray
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from smach import State, StateMachine, Iterator, Concurrence, loginfo
 from smach_ros import MonitorState, ServiceState, SimpleActionState, IntrospectionServer
@@ -24,98 +26,114 @@ class Setup(State):
 
 
 class ModeManager(State):
+    MODES = ['patrol', 'pause', 'verification', 'manual', 'standby']
+
     def __init__(self):
         State.__init__(self,
-                       outcomes=['patrol', 'verification', 'manual', 'standby', 'aborted', 'preempted'],
-                       input_keys=['config', 'nav_status'],
-                       output_keys=['config', 'nav_status'])
+                       outcomes=['patrol', 'pause', 'verification', 'manual', 'standby', 'aborted', 'preempted'],
+                       input_keys=['configs', 'cycle_log'],
+                       output_keys=['configs', 'cycle_log'])
 
-        self._current_mode = None
-        self._current_waypoints = []
-        self._incomplete_missions = []
-        self._patrol_waypoints = []
-        self._patrol_pause = 0
+        self._pub = rospy.Publisher('/mongo_bridge/data', DataArray, queue_size=1)
+        self._count_cycles_id = 0
+        self._count_id = 0
+        self._default_configs = None
+        self._current_configs = self._default_configs
+        self._incomplete_cycles = []
 
     def execute(self, userdata):
+        # Check if the last cycle was successfully completed
+        if userdata.cycle_log:
+            nav_outcome = userdata.cycle_log['status']
+            if nav_outcome != 'succeeded' and userdata.cycle_log['mode'] in ['verification', 'patrol']:
+                mission = self._current_configs.copy()
+                mission['start_wp_id'] = userdata.cycle_log['last_visited_wp'] + 1
+                mission['cycle_id'] = userdata.cycle_log['cycle_id']
+                self._incomplete_cycles.append(mission)
+            elif nav_outcome == 'aborted':
+                if self._default_configs['stamp'] == self._current_configs['stamp']:
+                    self._default_configs = None
+            userdata.cycle_log.clear()
+
         if self.preempt_requested():
             self.service_preempt()
             return 'preempted'
 
-        if userdata.nav_status:
-            nav_outcome = userdata.nav_status['outcome']
-            if nav_outcome != 'succeeded':
-                mission = {}
-                mission['mode'] = self._current_mode
-                mission['start_wp_id'] = userdata.nav_status['last_visited_wp'] + 1
-                mission['waypoints'] = self._current_waypoints
-                self._incomplete_missions.append(mission)
-                userdata.nav_status.clear()
+        userdata.configs['start_wp_id'] = 0
+        mode = ''
 
-        userdata.config['start_wp_id'] = 0
-        userdata.config['incomplete_mission'] = False
-
-        # Your state execution goes here
-        if 'change_mode' in userdata.config and userdata.config['change_mode']:
-            self._current_mode = userdata.config['mode']
-            if self._current_mode == 'manual':
-                self._current_waypoints = []
-            else:
-                self._current_waypoints = userdata.config['waypoints']
-            userdata.config['change_mode'] = False
-            if self._current_mode == 'patrol':
-                self._patrol_waypoints = self._current_waypoints
-                self._patrol_pause = userdata.config['pause']
-            return self._current_mode
-        elif self._current_mode:
-            if self._incomplete_missions:
-                last_mission = self._incomplete_missions.pop()
-                userdata.config['start_wp_id'] = last_mission['start_wp_id']
-                userdata.config['incomplete_mission'] = True
-                userdata.config['mode'] = last_mission['mode']
-                userdata.config['waypoints'] = last_mission['waypoints']
-                return last_mission['mode']
-            elif self._patrol_waypoints:
-                userdata.config['mode'] = 'patrol'
-                userdata.config['waypoints'] = self._patrol_waypoints
-                userdata.config['pause'] = self._patrol_pause
-                return 'patrol'
-            else:
-                return 'standby'
+        if 'change_mode' in userdata.configs and userdata.configs['change_mode']:
+            userdata.configs['change_mode'] = False
+            if userdata.configs['mode'] == 'patrol':
+                self._default_configs = userdata.configs
+        elif self._incomplete_cycles:
+            userdata.configs = self._incomplete_cycles.pop()
+        elif self._default_configs:
+            userdata.configs = self._default_configs
         else:
-            return 'standby'
+            userdata.configs.clear()
+            mode = 'standby'
+
+        if not mode:
+            self._current_configs = userdata.configs
+            mode = userdata.configs['mode'] if userdata.configs['mode'] in ModeManager.MODES else 'standby'
+
+        if 'cycle_id' in userdata.configs.keys():
+            userdata.cycle_log['cycle_id'] = userdata.configs['cycle_id']
+        else:
+            userdata.cycle_log['cycle_id'] = self._count_cycles_id
+            self._count_cycles_id += 1
+
+        userdata.cycle_log['mode'] = mode
+        userdata.cycle_log['status'] = 'active'
+        userdata.cycle_log['start_time'] = str(datetime.datetime.now()).split('.')[0]
+        self.save_log(userdata.cycle_log)
+
+        if self.preempt_requested():
+            self.service_preempt()
+            return 'preempted'
+
+        print(userdata.configs)
+        return mode
+
+    def save_log(self, cycle_log):
+        data = Data()
+        data.dataModule = 'schemas'
+        data.dataClass = 'Cycle'
+        data.jsonData = json.dumps(cycle_log)
+
+        data_array = DataArray()
+        data_array.data.append(data)
+
+        self._pub.publish(data_array)
 
 
 class PatrolControl(State):
     def __init__(self):
         State.__init__(self,
-                       outcomes=['navigation', 'pause', 'aborted', 'preempted'],
-                       input_keys=['config'])
+                       outcomes=['navigation', 'aborted', 'preempted'])
         self.last_outcomes = None
 
     def execute(self, userdata):
         if self.preempt_requested():
             self.service_preempt()
             return 'preempted'
-        if userdata.config['incomplete_mission'] or self.last_outcomes != 'navigation':
-            self.last_outcomes = 'navigation'
-            return 'navigation'
         else:
-            self.last_outcomes = 'pause'
-            return 'pause'
+            return 'navigation'
 
 
 class Pause(State):
     def __init__(self):
         State.__init__(self,
                        outcomes=['succeeded', 'aborted', 'preempted'],
-                       input_keys=['config'])
+                       input_keys=['configs'])
 
     def execute(self, userdata):
         if self.preempt_requested():
             self.service_preempt()
             return 'preempted'
 
-        time.sleep(userdata.config['pause'])
+        time.sleep(userdata.configs['pause'])
 
         if self.preempt_requested():
             self.service_preempt()
@@ -132,6 +150,7 @@ class Manual(State):
         self.sub = rospy.Subscriber("manual_mode_cmd_vel", Twist, self.manual_cmd_cb)
 
         self._trigger_event = threading.Event()
+        self._time_last_cmd = 0.0
 
     def execute(self, userdata):
         if self.preempt_requested():
@@ -168,17 +187,19 @@ class Verification(State):
         State.__init__(self, outcomes=['navigation', 'aborted', 'preempted'])
 
     def execute(self, userdata):
-        # Your state execution goes here
         return 'navigation'
 
 
 class OperatingMode(StateMachine):
     def __init__(self):
         StateMachine.__init__(self,
-                              outcomes=['standby', 'aborted', 'preempted'],
-                              input_keys=['config'])
+                              outcomes=['succeeded', 'standby', 'aborted', 'preempted'],
+                              input_keys=['configs'],
+                              output_keys=['cycle_log'])
+        self.userdata.cycle_log = {}
+        self._pub = rospy.Publisher('/mongo_bridge/data', DataArray, queue_size=1)
 
-        self.userdata.nav_status = {}
+        self.register_termination_cb(self.operating_mode_termination_cb)
 
         with self:
             # ===== MODE_MANAGER State =====
@@ -187,17 +208,17 @@ class OperatingMode(StateMachine):
                              transitions={'patrol': 'PATROL',
                                           'verification': 'VERIFICATION',
                                           'manual': 'MANUAL',
+                                          'pause': 'PAUSE',
                                           'standby': 'standby'})
 
             # ===== PATROL State =====
             StateMachine.add('PATROL',
                              PatrolControl(),
-                             transitions={'navigation': 'WAYPOINTS_ITERATOR',
-                                          'pause': 'PAUSE'})
+                             transitions={'navigation': 'WAYPOINTS_ITERATOR'})
 
             StateMachine.add('PAUSE',
                              Pause(),
-                             transitions={'succeeded': 'PATROL'})
+                             transitions={'succeeded': 'succeeded'})
 
             # ===== VERIFICATION State =====
             StateMachine.add('VERIFICATION',
@@ -207,28 +228,28 @@ class OperatingMode(StateMachine):
             # ===== MANUAL State =====
             StateMachine.add('MANUAL',
                              Manual(),
-                             transitions={'succeeded': 'MODE_MANAGER'})
+                             transitions={'succeeded': 'succeeded'})
 
             # ===== WAYPOINTS_ITERATOR State =====
             self.sm_nav_iterator = Iterator(outcomes=['succeeded', 'preempted', 'aborted'],
-                                            input_keys=['config'],
+                                            input_keys=['configs', 'cycle_log'],
                                             it=[],
-                                            output_keys=['config'],
+                                            output_keys=['configs', 'cycle_log'],
                                             it_label='waypoint_id',
                                             exhausted_outcome='succeeded')
 
-            self.sm_nav_iterator.register_termination_cb(self.save_log_iterator)
             self.sm_nav_iterator.register_start_cb(self.set_it_from_userdata)
+            self.sm_nav_iterator.register_termination_cb(self.set_last_visited_wp)
 
             with self.sm_nav_iterator:
                 self.sm_nav = StateMachine(outcomes=['succeeded', 'preempted', 'aborted', 'continue'],
-                                      input_keys=['waypoint_id', 'config'])
+                                           input_keys=['waypoint_id', 'cycle_log', 'configs'])
 
                 with self.sm_nav:
                     StateMachine.add('MOVE_BASE',
                                      SimpleActionState('move_base',
                                                        MoveBaseAction,
-                                                       input_keys=['waypoint_id', 'config'],
+                                                       input_keys=['waypoint_id', 'configs'],
                                                        goal_cb=self.move_base_goal_cb),
                                      transitions={'succeeded': 'SAVE_DATA'})
 
@@ -247,7 +268,29 @@ class OperatingMode(StateMachine):
 
             StateMachine.add('WAYPOINTS_ITERATOR',
                              self.sm_nav_iterator,
-                             {'succeeded': 'MODE_MANAGER'})
+                             {'succeeded': 'succeeded'})
+
+    def save_log(self, cycle_log):
+        data = Data()
+        data.dataModule = 'schemas'
+        data.dataClass = 'Cycle'
+        data.jsonData = json.dumps(cycle_log)
+
+        data_array = DataArray()
+        data_array.data.append(data)
+
+        self._pub.publish(data_array)
+
+    def operating_mode_termination_cb(self, userdata, terminal_states, container_outcome):
+        userdata.cycle_log['status'] = container_outcome
+        userdata.cycle_log['end_time'] = str(datetime.datetime.now()).split('.')[0]
+        self.save_log(userdata.cycle_log)
+
+    def set_last_visited_wp(self, userdata, terminal_states, container_outcome):
+        if container_outcome == 'continue' or container_outcome == 'succeeded':
+            userdata.cycle_log['last_visited_wp'] = userdata.waypoint_id
+        else:
+            userdata.cycle_log['last_visited_wp'] = userdata.waypoint_id - 1
 
     def save_data_response_cb(self, userdata, response):
         if self.save_data_service.preempt_requested():
@@ -262,7 +305,7 @@ class OperatingMode(StateMachine):
         nav_goal = MoveBaseGoal()
         nav_goal.target_pose.header.frame_id = 'map'
         waypoint_id = userdata.waypoint_id
-        waypoints = userdata.config['waypoints']
+        waypoints = userdata.configs['waypoints']
         waypoint = next(wp for wp in waypoints if wp["id"] == waypoint_id)
 
         position = Point(waypoint['x'], waypoint['y'], 0.0)
@@ -276,17 +319,9 @@ class OperatingMode(StateMachine):
 
     def set_it_from_userdata(self, userdata, initial_states):
         with self.sm_nav_iterator:
-            wp = userdata.config['waypoints']
-            start_id = userdata.config['start_wp_id']
+            wp = userdata.configs['waypoints']
+            start_id = userdata.configs['start_wp_id']
             Iterator.set_iteritems(range(start_id, len(wp)), 'waypoint_id')
-
-    def save_log_iterator(self, userdata, terminal_states, container_outcome):
-        if container_outcome == 'continue' or container_outcome == 'succeeded':
-            self.userdata.nav_status['last_visited_wp'] = userdata.waypoint_id
-        else:
-            self.userdata.nav_status['last_visited_wp'] = userdata.waypoint_id - 1
-
-        self.userdata.nav_status['outcome'] = container_outcome
 
 
 class Main():
@@ -341,7 +376,7 @@ class Main():
                                                       outcome_cb=self.outcome_cb
                                                       )
 
-            self.sm_battery_concurrence.userdata.config_monitor = {'mode': None, 'change_mode': False}
+            self.sm_battery_concurrence.userdata.mode_configs = {'mode': None, 'change_mode': False}
 
             # Open the container
             with self.sm_battery_concurrence:
@@ -354,12 +389,20 @@ class Main():
                                 MonitorState("/change_mode",
                                              String,
                                              self.change_mode_monitor_cb,
-                                             output_keys=['config_monitor'],
-                                             input_keys=['config_monitor']))
+                                             output_keys=['mode_configs'],
+                                             input_keys=['mode_configs']))
+
+                self.operating_mode = StateMachine(outcomes=['succeeded', 'aborted', 'preempted', 'standby'],
+                                                   input_keys=['mode_configs'])
+
+                with self.operating_mode:
+                    StateMachine.add('ST_OPERATING_MODE',
+                                     OperatingMode(),
+                                     transitions={'succeeded': 'ST_OPERATING_MODE'},
+                                     remapping={'configs': 'mode_configs'})
 
                 Concurrence.add('OPERATING_MODE',
-                                OperatingMode(),
-                                remapping={'config': 'config_monitor'})
+                                self.operating_mode)
 
             StateMachine.add('TOP_CONTROL',
                              self.sm_battery_concurrence,
@@ -380,9 +423,10 @@ class Main():
         intro_server.stop()
 
     def child_termination_cb(self, outcome_map):
-        if outcome_map['BATTERY_MONITOR'] == 'invalid':
-            return True
-        elif outcome_map['CHANGE_MODE_MONITOR'] == 'invalid':
+        if outcome_map['BATTERY_MONITOR'] == 'invalid' or \
+                outcome_map['CHANGE_MODE_MONITOR'] == 'invalid' or \
+                outcome_map['OPERATING_MODE'] == 'aborted' or \
+                outcome_map['OPERATING_MODE'] == 'preempted':
             return True
         else:
             return False
@@ -390,7 +434,9 @@ class Main():
     def outcome_cb(self, outcome_map):
         if outcome_map['BATTERY_MONITOR'] == 'invalid':
             return 'recharge'
-        elif outcome_map['CHANGE_MODE_MONITOR'] == 'invalid':
+        elif outcome_map['CHANGE_MODE_MONITOR'] == 'invalid' or \
+                outcome_map['OPERATING_MODE'] == 'aborted' or \
+                outcome_map['OPERATING_MODE'] == 'preempted':
             return 'restart'
         else:
             return 'stop'
@@ -404,9 +450,10 @@ class Main():
     def change_mode_monitor_cb(self, userdata, msg):
         if msg.data:
             data = json.loads(msg.data)
-            if not 'stamp' in userdata.config_monitor.keys() or userdata.config_monitor['stamp'] != data['stamp']:
-                userdata.config_monitor = data
-                userdata.config_monitor['change_mode'] = True
+            if not hasattr(self, '_last_msg_stamp') or self._last_msg_stamp != data['stamp']:
+                userdata.mode_configs = data
+                userdata.mode_configs['change_mode'] = True
+                self._last_msg_stamp = data['stamp']
                 return False
         else:
             return True

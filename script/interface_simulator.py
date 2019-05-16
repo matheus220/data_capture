@@ -26,23 +26,23 @@ def interface():
         pub.publish(ros_msg)
 
     # while not rospy.is_shutdown():
-
+    '''
     msg = {"mode": "manual",
            "stamp": rospy.Time.now().to_sec()
            }
 
-    publish_msg(msg, 10.0)
-
+    publish_msg(msg, 5.0)
+    '''
     msg = {"mode":"patrol",
            "pause":10,
-           "waypoints":[{"id": 0, "x":-0.5, "y":-0.5, "theta":0},
+           "waypoints":[{"id": 0, "x":-6, "y":4, "theta":0},
                         {"id": 1, "x":-0.5, "y":0.5, "theta":0},
                         {"id": 2, "x":0.5, "y":0.5, "theta":0},
                         {"id": 3, "x":0.5, "y":-0.5, "theta":0}],
            "stamp": rospy.Time.now().to_sec()
            }
 
-    publish_msg(msg, 100.0)
+    publish_msg(msg, 5.0)
 
     msg = {"mode": "patrol",
            "pause": 5,
