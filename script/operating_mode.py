@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from mongodb_bridge import MongoBridge
 
 import datetime
 import json
@@ -8,13 +9,14 @@ import time
 import rospy
 from data_capture.srv import RequestSaveData, SetBatteryLevel
 from geometry_msgs.msg import Point, Quaternion, Pose, Twist
-from mongo_bridge.msg import Data, DataArray
+from mongodb_bridge.msg import Data, DataArray
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from smach import State, StateMachine, Iterator, Concurrence, loginfo
 from smach_ros import MonitorState, ServiceState, SimpleActionState, IntrospectionServer
 from std_msgs.msg import Float32, String
 from tf.transformations import quaternion_from_euler
 
+mongo_bridge = None
 
 class Setup(State):
     def __init__(self):
@@ -34,25 +36,25 @@ class ModeManager(State):
                        input_keys=['configs', 'cycle_log'],
                        output_keys=['configs', 'cycle_log'])
 
-        self._pub = rospy.Publisher('/mongo_bridge/data', DataArray, queue_size=1)
         self._count_cycles_id = 0
         self._count_id = 0
         self._default_configs = None
         self._current_configs = self._default_configs
         self._incomplete_cycles = []
+        self._last_patrol_cycle_pause = True
 
     def execute(self, userdata):
         # Check if the last cycle was successfully completed
         if userdata.cycle_log:
             nav_outcome = userdata.cycle_log['status']
-            if nav_outcome != 'succeeded' and userdata.cycle_log['mode'] in ['verification', 'patrol']:
+            if nav_outcome == 'aborted':
+                if self._default_configs['stamp'] == self._current_configs['stamp']:
+                    self._default_configs = None
+            elif nav_outcome != 'succeeded' and userdata.cycle_log['mode'] in ['verification', 'patrol']:
                 mission = self._current_configs.copy()
                 mission['start_wp_id'] = userdata.cycle_log['last_visited_wp'] + 1
                 mission['cycle_id'] = userdata.cycle_log['cycle_id']
                 self._incomplete_cycles.append(mission)
-            elif nav_outcome == 'aborted':
-                if self._default_configs['stamp'] == self._current_configs['stamp']:
-                    self._default_configs = None
             userdata.cycle_log.clear()
 
         if self.preempt_requested():
@@ -69,7 +71,12 @@ class ModeManager(State):
         elif self._incomplete_cycles:
             userdata.configs = self._incomplete_cycles.pop()
         elif self._default_configs:
-            userdata.configs = self._default_configs
+            userdata.configs = self._default_configs.copy()
+            if self._last_patrol_cycle_pause:
+                self._last_patrol_cycle_pause = False
+            else:
+                self._last_patrol_cycle_pause = True
+                userdata.configs['mode'] = 'pause'
         else:
             userdata.configs.clear()
             mode = 'standby'
@@ -87,25 +94,16 @@ class ModeManager(State):
         userdata.cycle_log['mode'] = mode
         userdata.cycle_log['status'] = 'active'
         userdata.cycle_log['start_time'] = str(datetime.datetime.now()).split('.')[0]
-        self.save_log(userdata.cycle_log)
+        mongo_bridge.add_data({'class_name': 'cycle',
+                               'item_name': 'cycle',
+                               'data': userdata.cycle_log})
+        mongo_bridge.send_data()
 
         if self.preempt_requested():
             self.service_preempt()
             return 'preempted'
 
-        print(userdata.configs)
         return mode
-
-    def save_log(self, cycle_log):
-        data = Data()
-        data.dataModule = 'schemas'
-        data.dataClass = 'Cycle'
-        data.jsonData = json.dumps(cycle_log)
-
-        data_array = DataArray()
-        data_array.data.append(data)
-
-        self._pub.publish(data_array)
 
 
 class PatrolControl(State):
@@ -270,21 +268,15 @@ class OperatingMode(StateMachine):
                              self.sm_nav_iterator,
                              {'succeeded': 'succeeded'})
 
-    def save_log(self, cycle_log):
-        data = Data()
-        data.dataModule = 'schemas'
-        data.dataClass = 'Cycle'
-        data.jsonData = json.dumps(cycle_log)
-
-        data_array = DataArray()
-        data_array.data.append(data)
-
-        self._pub.publish(data_array)
-
     def operating_mode_termination_cb(self, userdata, terminal_states, container_outcome):
+        if container_outcome == 'standby':
+            container_outcome = 'finished'
         userdata.cycle_log['status'] = container_outcome
         userdata.cycle_log['end_time'] = str(datetime.datetime.now()).split('.')[0]
-        self.save_log(userdata.cycle_log)
+        mongo_bridge.add_data({'class_name': 'cycle',
+                               'item_name': 'cycle',
+                               'data': userdata.cycle_log})
+        mongo_bridge.send_data()
 
     def set_last_visited_wp(self, userdata, terminal_states, container_outcome):
         if container_outcome == 'continue' or container_outcome == 'succeeded':
@@ -327,6 +319,9 @@ class OperatingMode(StateMachine):
 class Main():
     def __init__(self):
         rospy.init_node('operating_mode', anonymous=False)
+
+        global mongo_bridge
+        mongo_bridge = MongoBridge()
 
         # Set the shutdown function (stop the robot)
         rospy.on_shutdown(self.shutdown)

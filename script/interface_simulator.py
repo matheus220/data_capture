@@ -33,12 +33,14 @@ def interface():
 
     publish_msg(msg, 5.0)
     '''
+
     msg = {"mode":"patrol",
            "pause":10,
-           "waypoints":[{"id": 0, "x":-6, "y":4, "theta":0},
+           "waypoints":[{"id": 0, "x":-0.5, "y":-0.5, "theta":0},
                         {"id": 1, "x":-0.5, "y":0.5, "theta":0},
                         {"id": 2, "x":0.5, "y":0.5, "theta":0},
-                        {"id": 3, "x":0.5, "y":-0.5, "theta":0}],
+                        {"id": 3, "x":0.5, "y":-0.5, "theta":0}
+                        ],
            "stamp": rospy.Time.now().to_sec()
            }
 
@@ -66,6 +68,39 @@ def interface():
 
 
     #    rate.sleep()
+
+    # cycle1 = {
+    #     "min_duration": 5,
+    #     "name": "long cycle",
+    #     "waypoints": [
+    #         {"id": 0, "x": -0.5, "y": -0.5, "theta": 0},
+    #         {"id": 1, "x": -0.5, "y": 0.5, "theta": 0},
+    #         {"id": 2, "x": 0.5, "y": 0.5, "theta": 0},
+    #         {"id": 3, "x": 0.5, "y": -0.5, "theta": 0}
+    #     ]
+    # }
+    #
+    # cycle2 = {
+    #     "name": "pause",
+    #     "min_duration": 1,
+    #     "waypoints": []
+    # }
+    #
+    # cycle3 = {
+    #     "name": "short cycle",
+    #     "min_duration": 1,
+    #     "waypoints": [
+    #         cycle1[0],
+    #         cycle1[2]
+    #     ]
+    # }
+    #
+    # msg = {"mode": "patrol",
+    #        "waypoints": [cycle1, cycle2, cycle3],
+    #        "stamp": rospy.Time.now().to_sec()
+    #        }
+    #
+    # publish_msg(msg, 5.0)
 
 
 
