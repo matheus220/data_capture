@@ -1,7 +1,7 @@
 <launch>
-	<node name="smach_viewer" pkg="smach_viewer" type="smach_viewer.py"/>
-	<node name="data_captation" pkg="data_capture" type="data_captation.py"/>
+	<node name="data_captation" pkg="data_capture" type="data_captation.py" output="screen"/>
 	<node name="operating_mode" pkg="data_capture" type="operating_mode.py" output="screen"/>
+	<include file="$(find mongodb_bridge)/launch/mongodb_manager.launch" />
 
 	<arg name="battery_runtime" default="300"/>
 
@@ -9,4 +9,5 @@
 		<param name="rate" value="5" />
 		<param name="battery_runtime" value="$(arg battery_runtime)" />
 	</node>
+	<!--node name="smach_viewer" pkg="smach_viewer" type="smach_viewer.py"/-->
 </launch>
