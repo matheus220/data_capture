@@ -1,0 +1,14 @@
+<launch>
+	<node name="range_conversion" pkg="service_datacenter" type="range_conversion.py" output="screen"/>
+	<node name="data_captation" pkg="service_datacenter" type="data_captation.py" output="screen"/>
+	<node name="operating_mode" pkg="service_datacenter" type="operating_mode.py" output="screen"/>
+	<include file="$(find mongodb_bridge)/launch/mongodb_manager.launch" />
+
+	<arg name="battery_runtime" default="300"/>
+	<node name="battery_simulator" pkg="service_datacenter" type="battery_simulator.py" output="screen" clear_params="true">
+		<param name="rate" value="5" />
+		<param name="battery_runtime" value="$(arg battery_runtime)" />
+	</node>
+
+	<!--node name="smach_viewer" pkg="smach_viewer" type="smach_viewer.py"/-->
+</launch>

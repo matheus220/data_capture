@@ -1,0 +1,45 @@
+GlobalPlanner:                                  # Also see: http://wiki.ros.org/global_planner
+  old_navfn_behavior: false                     # Exactly mirror behavior of navfn, use defaults for other boolean parameters, default false
+  use_quadratic: true                           # Use the quadratic approximation of the potential. Otherwise, use a simpler calculation, default true
+  use_dijkstra: true                            # Use dijkstra's algorithm. Otherwise, A*, default true
+  use_grid_path: false                          # Create a path that follows the grid boundaries. Otherwise, use a gradient descent method, default false
+
+  # Specifies whether or not to allow the planner to create plans that traverse unknown space. NOTE: if you are using a
+  # layered costmap_2d costmap with a voxel or obstacle layer, you must also set the track_unknown_space param for that
+  # layer to be true (in costmap_commons_param), or it will convert all your unknown space to free space (which planner
+  # will then happily go right through).
+  # ((default: true))
+  allow_unknown: false
+
+  # planner_window_x: 0.0                         # default 0.0
+  # planner_window_y: 0.0                         # default 0.0
+  # default_tolerance: 0.0                        # If goal in obstacle, plan to the closest point in radius default_tolerance, default 0.0
+
+  # publish_scale: 100                            # Scale by which the published potential gets multiplied, default 100
+  # planner_costmap_publish_frequency: 0.0        # default 0.0
+
+  lethal_cost: 253                              # default 253
+  neutral_cost: 60                              # default 50
+  cost_factor: 0.55                              # Factor to multiply each cost from costmap by, default 3.0
+
+  # Publish Potential Costmap (this is not like the navfn pointcloud2 potential)
+  # ((default: true)) ===> dynamic reconfigure
+  # publish_potential: true
+
+  # As a post-processing step, an orientation can be added to the points on the path. With use of the ~orientation_mode
+  # parameter (dynamic reconfigure), the following orientation modes can be set:
+  # None=0 (No orientations added except goal orientation)
+  # Forward=1 (Positive x axis points along path, except for the goal orientation)
+  # Interpolate=2 (Orientations are a linear blend of start and goal pose)
+  # ForwardThenInterpolate=3 (Forward orientation until last straightaway, then a linear blend until the goal pose)
+  # Backward=4 (Negative x axis points along the path, except for the goal orientation)
+  # Leftward=5 (Positive y axis points along the path, except for the goal orientation)
+  # Rightward=6 (Negative y axis points along the path, except for the goal orientation)
+  # The orientation of point i is calculated using the positions of i - orientation_window_size and
+  # `i + orientation_window_size`. The window size can be altered to smoothen the orientation calculation.
+  # ((default: 1)) ===> dynamic reconfigure
+  # orientation_mode: 1
+
+  # What window to use to determine the orientation based on the position derivative specified by the orientation mode
+  # ((default: 1)) ===> dynamic reconfigure
+  # orientation_window_size: 1

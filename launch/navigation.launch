@@ -1,0 +1,27 @@
+<launch>
+    <!-- Arguments -->
+    <arg name="map_file" default="$(find service_datacenter)/maps/datacenter_simulation.yaml"/>
+    <arg name="rviz" default="true"/>
+    <arg name="sim" default="true"/>
+
+    <!-- odometrie -->
+    <include file="$(find geko_odom)/launch/geko_odom.launch" unless="$(arg sim)">
+    </include>
+
+    <!-- Map server -->
+    <node pkg="map_server" name="map_server" type="map_server" args="$(arg map_file)"/>
+
+    <!-- AMCL -->
+    <include file="$(find service_datacenter)/launch/amcl.launch"/>
+
+    <!-- move_base -->
+    <include file="$(find service_datacenter)/launch/move_base.launch">
+        <arg name="cmd_vel_topic" value="/geko/base_controller/cmd_vel" if="$(arg sim)"/>
+        <arg name="cmd_vel_topic" value="/manual/cmd_vel" unless="$(arg sim)"/>
+    </include>
+
+    <!-- rviz -->
+    <group if="$(arg rviz)">
+        <node pkg="rviz" type="rviz" name="rviz" required="false" args="-d $(find service_datacenter)/rviz/navigation.rviz"/>
+    </group>
+</launch>

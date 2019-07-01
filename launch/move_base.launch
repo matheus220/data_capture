@@ -1,0 +1,21 @@
+<launch>
+    <!-- Arguments -->
+    <arg name="cmd_vel_topic" default="/geko/base_controller/cmd_vel"/>
+    <arg name="odom_topic" default="/odom"/>
+
+    <!-- move_base -->
+    <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+        <param name="base_global_planner" value="global_planner/GlobalPlanner"/>
+        <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS"/>
+        <rosparam file="$(find service_datacenter)/config/costmap_common_params.yaml" command="load" ns="global_costmap"/>
+        <rosparam file="$(find service_datacenter)/config/costmap_common_params.yaml" command="load" ns="local_costmap"/>
+        <rosparam file="$(find service_datacenter)/config/local_costmap_params.yaml" command="load"/>
+        <rosparam file="$(find service_datacenter)/config/global_costmap_params.yaml" command="load"/>
+        <rosparam file="$(find service_datacenter)/config/move_base_params.yaml" command="load"/>
+        <rosparam file="$(find service_datacenter)/config/dwa_local_planner_params.yaml" command="load"/>
+        <rosparam file="$(find service_datacenter)/config/global_planner_params.yaml" command="load"/>
+        <rosparam file="$(find service_datacenter)/config/recovery_behaviors.yaml" command="load"/>
+        <remap from="cmd_vel" to="$(arg cmd_vel_topic)"/>
+        <remap from="odom" to="$(arg odom_topic)"/>
+    </node>
+</launch>
